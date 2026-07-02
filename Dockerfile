@@ -17,16 +17,16 @@ FROM oven/bun:1.1-alpine AS production
 WORKDIR /app/backend
 
 COPY backend/package.json backend/bun.lockb* ./
-
-# 🔥 FIX: Added --ignore-scripts to bypass the Prisma pre-install version block
 RUN bun install --frozen-lockfile --ignore-scripts
 
 COPY backend/ ./
 
-# Generate your specific Prisma client engine for the Alpine container environment
+# 🔥 FIX 2: Provide a placeholder database URL so Prisma can generate types without crashing during the build
+ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
 RUN bunx prisma generate
 
-COPY --from=frontend-builder /app/backend/dist /app/dist
+# 🔥 FIX 1: Corrected the folder path from /app/backend/dist to /app/frontend/dist
+COPY --from=frontend-builder /app/frontend/dist /app/dist
 
 EXPOSE 3001
 ENV PORT=3001
