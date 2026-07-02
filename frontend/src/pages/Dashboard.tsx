@@ -58,28 +58,52 @@ interface ParsedStream {
   sources: { url: string }[];
 }
 
+// Prevents partial tags (e.g. "<ANS", "</FOLLOW") from displaying in UI during stream
+function stripPartialTags(val: string): string {
+  const partials = [
+    "<ANSWER>", "</ANSWER>",
+    "<FOLLOW_UPS>", "</FOLLOW_UPS>",
+    "<SOURCES>", "</SOURCES>",
+    "<think>", "</think>",
+    "<question>", "</question>"
+  ];
+  
+  const lastOpenBracket = val.lastIndexOf("<");
+  if (lastOpenBracket !== -1) {
+    const suffix = val.slice(lastOpenBracket);
+    const isPrefix = partials.some(tag => tag.startsWith(suffix));
+    if (isPrefix) {
+      return val.slice(0, lastOpenBracket);
+    }
+  }
+  return val;
+}
+
 function parseStreamContent(text: string): ParsedStream {
   let answer = "";
   const followUps: string[] = [];
   let sources: { url: string }[] = [];
 
-  // Extract Answer
-  const answerStart = text.indexOf("<ANSWER>");
-  if (answerStart !== -1) {
-    const answerEnd = text.indexOf("</ANSWER>");
-    if (answerEnd !== -1) {
-      answer = text.slice(answerStart + 8, answerEnd);
-    } else {
-      answer = text.slice(answerStart + 8);
-    }
-  } else {
-    // Fallback if no tags yet
-    if (text.indexOf("<FOLLOW_UPS>") === -1 && text.indexOf("<SOURCES>") === -1) {
-      answer = text;
+  // 1. Extract Sources
+  const sourcesStart = text.indexOf("<SOURCES>");
+  if (sourcesStart !== -1) {
+    const sourcesEnd = text.indexOf("</SOURCES>");
+    const sourcesBlockText =
+      sourcesEnd !== -1
+        ? text.slice(sourcesStart + 9, sourcesEnd)
+        : text.slice(sourcesStart + 9);
+
+    try {
+      const trimmed = sourcesBlockText.trim();
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        sources = JSON.parse(trimmed);
+      }
+    } catch (e) {
+      // JSON incomplete
     }
   }
 
-  // Extract Follow Ups
+  // 2. Extract Follow Ups
   const followUpsStart = text.indexOf("<FOLLOW_UPS>");
   if (followUpsStart !== -1) {
     const followUpsEnd = text.indexOf("</FOLLOW_UPS>");
@@ -97,28 +121,65 @@ function parseStreamContent(text: string): ParsedStream {
     }
   }
 
-  // Extract Sources
-  const sourcesStart = text.indexOf("<SOURCES>");
-  if (sourcesStart !== -1) {
-    const sourcesEnd = text.indexOf("</SOURCES>");
-    const sourcesBlockText =
-      sourcesEnd !== -1
-        ? text.slice(sourcesStart + 9, sourcesEnd)
-        : text.slice(sourcesStart + 9);
+  // 3. Extract Answer and Clean Tags
+  let cleanText = text;
 
-    try {
-      const trimmed = sourcesBlockText.trim();
-      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-        sources = JSON.parse(trimmed);
-      } else if (trimmed.startsWith("[")) {
-        // partial parse if needed, but we usually wait for end tag
-      }
-    } catch (e) {
-      // JSON incomplete
+  // Strip <SOURCES>...</SOURCES> block
+  const sStart = cleanText.indexOf("<SOURCES>");
+  if (sStart !== -1) {
+    const sEnd = cleanText.indexOf("</SOURCES>");
+    if (sEnd !== -1) {
+      cleanText = cleanText.slice(0, sStart) + cleanText.slice(sEnd + 10);
+    } else {
+      cleanText = cleanText.slice(0, sStart);
     }
   }
 
-  return { answer, followUps, sources };
+  // Strip <FOLLOW_UPS>...</FOLLOW_UPS> block
+  const fStart = cleanText.indexOf("<FOLLOW_UPS>");
+  if (fStart !== -1) {
+    const fEnd = cleanText.indexOf("</FOLLOW_UPS>");
+    if (fEnd !== -1) {
+      cleanText = cleanText.slice(0, fStart) + cleanText.slice(fEnd + 13);
+    } else {
+      cleanText = cleanText.slice(0, fStart);
+    }
+  }
+
+  // Strip <think>...</think> reasoning blocks
+  const tStart = cleanText.indexOf("<think>");
+  if (tStart !== -1) {
+    const tEnd = cleanText.indexOf("</think>");
+    if (tEnd !== -1) {
+      cleanText = cleanText.slice(0, tStart) + cleanText.slice(tEnd + 8);
+    } else {
+      cleanText = cleanText.slice(0, tStart);
+    }
+  }
+
+  // Extract from <ANSWER>...</ANSWER>
+  const answerStart = cleanText.indexOf("<ANSWER>");
+  if (answerStart !== -1) {
+    const answerEnd = cleanText.indexOf("</ANSWER>");
+    answer = answerEnd !== -1
+      ? cleanText.slice(answerStart + 8, answerEnd)
+      : cleanText.slice(answerStart + 8);
+  } else {
+    // If no tags present at all, treat the cleanText as answer
+    answer = cleanText;
+  }
+
+  // Remove any remaining stray tags
+  answer = answer.replace(/<\/?ANSWER>/g, "");
+  answer = answer.replace(/<\/?FOLLOW_UPS>/g, "");
+  answer = answer.replace(/<\/?SOURCES>/g, "");
+  answer = answer.replace(/<\/?think>/g, "");
+  answer = answer.replace(/<\/?question>/g, "");
+
+  // Prevent partial tags from rendering
+  answer = stripPartialTags(answer);
+
+  return { answer: answer.trim(), followUps, sources };
 }
 
 // ----------------------------------------
@@ -307,7 +368,7 @@ const Dashboard = () => {
   const [query, setQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [searchPhase, setSearchPhase] = useState("");
-  const [activeTab, setActiveTab] = useState("all"); // Discover, Finance, Health, Academic, Patents
+  const [activeTab, setActiveTab] = useState("all");
   const [selectedFocus, setSelectedFocus] = useState("All");
   const [selectedModel, setSelectedModel] = useState("Qwen 2.5 (High)");
   const [isComputerEnabled, setIsComputerEnabled] = useState(false);
@@ -432,7 +493,6 @@ const Dashboard = () => {
       sources: [],
     };
 
-    // If it's a follow up or a new thread
     const isFollowUp = activeConversationId !== null;
     const updatedMessages = [...messages, userMessage, initialAssistantMessage];
     setMessages(updatedMessages);
@@ -465,7 +525,6 @@ const Dashboard = () => {
         throw new Error(`Server returned error ${response.status}`);
       }
 
-      // Capture conversation ID if newly created
       if (!isFollowUp) {
         const streamConversationId = response.headers.get("X-Conversation-Id");
         if (streamConversationId) {
@@ -478,7 +537,7 @@ const Dashboard = () => {
       let done = false;
       let accumulatedText = "";
 
-      setSearchPhase("Synthesizing response...");
+      setSearchPhase("Analyzing search results...");
 
       while (!done) {
         const { value, done: doneReading } = await reader!.read();
@@ -489,10 +548,12 @@ const Dashboard = () => {
 
           const parsed = parseStreamContent(accumulatedText);
 
-          // Update search phase based on tag detection in stream
+          // Dynamically adjust search phase
           if (accumulatedText.includes("<SOURCES>") && !accumulatedText.includes("</SOURCES>")) {
-            setSearchPhase("Structuring sources...");
-          } else if (accumulatedText.includes("</SOURCES>")) {
+            setSearchPhase("Parsing sources...");
+          } else if (accumulatedText.includes("</SOURCES>") && !parsed.answer) {
+            setSearchPhase("Synthesizing answer...");
+          } else {
             setSearchPhase("");
           }
 
@@ -514,8 +575,6 @@ const Dashboard = () => {
 
       setIsSearching(false);
       setSearchPhase("");
-
-      // Refresh sidebar list
       getExistingConversations();
     } catch (err) {
       console.error("Search failed:", err);
@@ -543,7 +602,6 @@ const Dashboard = () => {
     setSearchPhase("");
   };
 
-  // Auth logout
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -559,7 +617,6 @@ const Dashboard = () => {
     );
   }
 
-  // Get user initial for avatar
   const userInitial = user?.email ? user.email.charAt(0).toUpperCase() : "U";
   const userDisplayName = user?.user_metadata?.full_name || user?.email?.split("@")[0] || "User";
 
@@ -587,7 +644,6 @@ const Dashboard = () => {
               </span>
             </div>
             
-            {/* Sidebar toggle shortcut simulation */}
             <button className="text-gray-500 hover:text-gray-300 p-1 rounded-md hover:bg-white/5 transition-all">
               <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h7" />
@@ -677,7 +733,6 @@ const Dashboard = () => {
         {/* User profile & Logout footer */}
         <div className="p-4 flex flex-col space-y-3">
           
-          {/* Upgrade Plan Pill */}
           <button className="flex items-center justify-between w-full px-3 py-2 text-xs font-bold text-[#E3E3E3] hover:text-white bg-[#1F1916] border border-[#3E291F] rounded-xl hover:bg-[#2B2019] transition-all cursor-pointer">
             <span className="flex items-center space-x-2">
               <Sparkles className="w-4 h-4 text-amber-500" />
@@ -685,7 +740,6 @@ const Dashboard = () => {
             </span>
           </button>
 
-          {/* User info & Signout */}
           <div className="flex items-center justify-between pt-1">
             <div className="flex items-center space-x-2.5 min-w-0">
               <div className="w-8 h-8 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center shrink-0 text-sm shadow-md">
@@ -720,49 +774,19 @@ const Dashboard = () => {
         {/* Top Header Category Bar */}
         <header className="h-14 border-b border-[#1E1E20] flex items-center justify-between px-6 shrink-0 z-10 bg-[#131314]/90 backdrop-blur-md">
           <div className="flex items-center space-x-5 text-sm font-medium text-gray-400">
-            <button
-              onClick={() => setActiveTab("all")}
-              className={`hover:text-white transition-colors py-4 border-b-2 cursor-pointer ${
-                activeTab === "all" ? "text-white border-teal-400" : "border-transparent"
-              }`}
-            >
-              Discover
-            </button>
-            <button
-              onClick={() => setActiveTab("finance")}
-              className={`hover:text-white transition-colors py-4 border-b-2 cursor-pointer ${
-                activeTab === "finance" ? "text-white border-teal-400" : "border-transparent"
-              }`}
-            >
-              Finance
-            </button>
-            <button
-              onClick={() => setActiveTab("health")}
-              className={`hover:text-white transition-colors py-4 border-b-2 cursor-pointer ${
-                activeTab === "health" ? "text-white border-teal-400" : "border-transparent"
-              }`}
-            >
-              Health
-            </button>
-            <button
-              onClick={() => setActiveTab("academic")}
-              className={`hover:text-white transition-colors py-4 border-b-2 cursor-pointer ${
-                activeTab === "academic" ? "text-white border-teal-400" : "border-transparent"
-              }`}
-            >
-              Academic
-            </button>
-            <button
-              onClick={() => setActiveTab("patents")}
-              className={`hover:text-white transition-colors py-4 border-b-2 cursor-pointer ${
-                activeTab === "patents" ? "text-white border-teal-400" : "border-transparent"
-              }`}
-            >
-              Patents
-            </button>
+            {["all", "finance", "health", "academic", "patents"].map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`hover:text-white capitalize transition-colors py-4 border-b-2 cursor-pointer ${
+                  activeTab === tab ? "text-white border-teal-400" : "border-transparent"
+                }`}
+              >
+                {tab === "all" ? "Discover" : tab}
+              </button>
+            ))}
           </div>
 
-          {/* Right Header items */}
           <div className="flex items-center space-x-3">
             <div className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-[#1E1E20] border border-[#252528] rounded-full text-xs font-semibold text-gray-400">
               <PlusCircle className="w-3.5 h-3.5 text-teal-400" />
@@ -777,9 +801,9 @@ const Dashboard = () => {
         </header>
 
         {/* ----------------------------------------
-            CONTENT CONTAINER
+            CONTENT CONTAINER (Fixed Outer Pane)
             ---------------------------------------- */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col items-center">
+        <div className="flex-1 flex flex-col overflow-hidden items-center w-full relative">
           
           {messages.length === 0 ? (
             
@@ -788,12 +812,10 @@ const Dashboard = () => {
                ======================================== */
             <div className="w-full max-w-2xl px-6 flex-1 flex flex-col items-center justify-center pb-20 mt-10">
               
-              {/* Logo Heading */}
               <h2 className="text-[44px] font-extrabold text-white tracking-tight mb-8 font-sans select-none">
                 purplexity
               </h2>
 
-              {/* Search Box Card */}
               <div className="w-full bg-[#1E1E20] border border-[#2A2A2D] rounded-2xl p-4 shadow-xl focus-within:border-[#38383C] focus-within:ring-1 focus-within:ring-white/5 transition-all">
                 <textarea
                   ref={textareaRef}
@@ -810,13 +832,11 @@ const Dashboard = () => {
                   className="w-full bg-transparent text-white border-0 outline-none text-sm placeholder-gray-500 resize-none max-h-48 py-1 focus:ring-0 leading-relaxed"
                 />
 
-                {/* Search Box Action Bar */}
+                {/* Bottom Options inside home search bar */}
                 <div className="flex items-center justify-between pt-3 mt-2 border-t border-white/5">
-                  
-                  {/* Left Badges */}
                   <div className="flex items-center space-x-2 relative">
                     
-                    {/* Focus Dropdown Selector */}
+                    {/* Focus Dropdown */}
                     <div className="relative">
                       <button
                         onClick={() => setShowFocusDropdown(!showFocusDropdown)}
@@ -845,7 +865,7 @@ const Dashboard = () => {
                       )}
                     </div>
 
-                    {/* Computer Badge */}
+                    {/* Computer Toggle */}
                     <button
                       onClick={() => setIsComputerEnabled(!isComputerEnabled)}
                       className={`flex items-center space-x-1.5 px-3 py-1.5 border rounded-full text-xs font-semibold transition-all cursor-pointer ${
@@ -858,7 +878,7 @@ const Dashboard = () => {
                       <span>Computer</span>
                     </button>
 
-                    {/* Model Dropdown Selector */}
+                    {/* Model Dropdown */}
                     <div className="relative">
                       <button
                         onClick={() => setShowModelDropdown(!showModelDropdown)}
@@ -888,7 +908,6 @@ const Dashboard = () => {
                     </div>
                   </div>
 
-                  {/* Right Actions */}
                   <div className="flex items-center space-x-2">
                     <button className="text-gray-500 hover:text-gray-300 p-2 rounded-full hover:bg-white/5 transition-all">
                       <Mic className="w-4 h-4" />
@@ -914,142 +933,140 @@ const Dashboard = () => {
             /* ========================================
                ACTIVE CONVERSATION THREAD
                ======================================== */
-            <div className="w-full flex-1 flex flex-col">
+            <div className="w-full flex-1 flex flex-col overflow-hidden">
               
-              {/* Message scroll list */}
-              <div className="flex-1 w-full max-w-3xl mx-auto px-6 py-8 space-y-8">
-                {messages.map((message, index) => {
-                  const isUser = message.role === "User";
-                  
-                  return (
-                    <div key={index} className={`flex flex-col space-y-3 ${isUser ? "pb-2" : "pb-6 border-b border-[#1E1E20]"}`}>
-                      
-                      {/* Message Sender Header */}
-                      <div className="flex items-center space-x-2">
-                        {isUser ? (
-                          <>
-                            <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-xs">
-                              {userInitial}
-                            </div>
-                            <h3 className="text-sm font-semibold text-white">
-                              {message.content}
-                            </h3>
-                          </>
-                        ) : (
-                          <>
-                            <div className="w-6 h-6 rounded-lg bg-teal-500 text-black font-extrabold flex items-center justify-center text-xs">
-                              P
-                            </div>
-                            <h3 className="text-sm font-bold text-white tracking-wide">
-                              purplexity
-                            </h3>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Message Content */}
-                      {!isUser && (
-                        <div className="pl-8 space-y-4">
-                          
-                          {/* 1. Sources Cards Grid */}
-                          {message.sources && message.sources.length > 0 && (
-                            <div className="space-y-2">
-                              <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest block">
-                                Sources
-                              </span>
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                                {message.sources.map((src, idx) => {
-                                  const domain = getDomain(src.url);
-                                  const iconUrl = `https://www.google.com/s2/favicons?sz=64&domain=${domain}`;
-                                  
-                                  return (
-                                    <a
-                                      key={idx}
-                                      href={src.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="flex items-center space-x-2 p-2 bg-[#1E1E20] hover:bg-[#252528] border border-white/5 hover:border-white/10 rounded-lg text-xs transition-all text-gray-300 hover:text-white"
-                                    >
-                                      <span className="w-4.5 h-4.5 rounded bg-black/40 text-[10px] text-teal-400 font-extrabold flex items-center justify-center shrink-0 border border-white/5">
-                                        {idx + 1}
-                                      </span>
-                                      
-                                      <img
-                                        src={iconUrl}
-                                        alt=""
-                                        onError={(e) => {
-                                          (e.target as HTMLElement).style.display = "none";
-                                        }}
-                                        className="w-3.5 h-3.5 shrink-0 object-contain"
-                                      />
-                                      
-                                      <span className="truncate flex-1 font-medium">
-                                        {domain}
-                                      </span>
-                                      
-                                      <ExternalLink className="w-3 h-3 text-gray-600 shrink-0" />
-                                    </a>
-                                  );
-                                })}
+              {/* Message scroll list - scrolls independently */}
+              <div className="flex-1 w-full overflow-y-auto custom-scrollbar px-6 py-8">
+                <div className="max-w-3xl mx-auto space-y-8">
+                  {messages.map((message, index) => {
+                    const isUser = message.role === "User";
+                    
+                    return (
+                      <div key={index} className={`flex flex-col space-y-3 ${isUser ? "pb-2" : "pb-6 border-b border-white/5"}`}>
+                        
+                        {/* Sender header */}
+                        <div className="flex items-center space-x-2">
+                          {isUser ? (
+                            <>
+                              <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-xs">
+                                {userInitial}
                               </div>
-                            </div>
-                          )}
-
-                          {/* 2. Streaming Loading state for active answer */}
-                          {isSearching && index === messages.length - 1 && !message.answer && (
-                            <div className="flex items-center space-x-2 py-4">
-                              <div className="relative w-6 h-6">
-                                <div className="absolute inset-0 rounded-full border-2 border-teal-500/20" />
-                                <div className="absolute inset-0 rounded-full border-2 border-teal-500 border-t-transparent animate-spin" />
+                              <h3 className="text-sm font-semibold text-white">
+                                {message.content}
+                              </h3>
+                            </>
+                          ) : (
+                            <>
+                              <div className="w-6 h-6 rounded-lg bg-teal-500 text-black font-extrabold flex items-center justify-center text-xs">
+                                P
                               </div>
-                              <span className="text-xs text-teal-400 font-semibold animate-pulse">
-                                {searchPhase}
-                              </span>
-                            </div>
-                          )}
-
-                          {/* 3. The main Markdown Text Answer */}
-                          {message.answer && (
-                            <div className="text-gray-300 prose prose-invert max-w-none">
-                              <Markdown text={message.answer} />
-                              
-                              {/* Pulsing cursor simulation during streaming */}
-                              {isSearching && index === messages.length - 1 && (
-                                <span className="inline-block w-1.5 h-4 ml-1 bg-teal-400 animate-pulse align-middle" />
-                              )}
-                            </div>
-                          )}
-
-                          {/* 4. Follow-up Clickable Questions */}
-                          {message.followUps && message.followUps.length > 0 && !isSearching && (
-                            <div className="pt-4 space-y-2">
-                              <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest block">
-                                Related
-                              </span>
-                              <div className="flex flex-col space-y-1.5">
-                                {message.followUps.map((q, qIdx) => (
-                                  <button
-                                    key={qIdx}
-                                    onClick={() => handleSearchSubmit(q)}
-                                    className="w-full text-left px-3.5 py-2.5 bg-transparent hover:bg-white/5 border border-white/5 rounded-xl text-xs font-semibold text-gray-300 hover:text-white flex items-center justify-between transition-all group cursor-pointer"
-                                  >
-                                    <span>{q}</span>
-                                    <Plus className="w-3.5 h-3.5 text-gray-500 group-hover:text-teal-400 group-hover:scale-110 transition-all shrink-0 ml-3" />
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
+                              <h3 className="text-sm font-bold text-white tracking-wide">
+                                purplexity
+                              </h3>
+                            </>
                           )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-                <div ref={threadEndRef} />
+
+                        {/* Content block */}
+                        {!isUser && (
+                          <div className="pl-8 space-y-4">
+                            
+                            {/* 1. Sources (Displays instantly when parsed from stream) */}
+                            {message.sources && message.sources.length > 0 && (
+                              <div className="space-y-2">
+                                <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest block">
+                                  Sources
+                                </span>
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                                  {message.sources.map((src, idx) => {
+                                    const domain = getDomain(src.url);
+                                    const iconUrl = `https://www.google.com/s2/favicons?sz=64&domain=${domain}`;
+                                    
+                                    return (
+                                      <a
+                                        key={idx}
+                                        href={src.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center space-x-2 p-2 bg-[#1E1E20] hover:bg-[#252528] border border-white/5 hover:border-white/10 rounded-lg text-xs transition-all text-gray-300 hover:text-white"
+                                      >
+                                        <span className="w-4.5 h-4.5 rounded bg-black/40 text-[10px] text-teal-400 font-extrabold flex items-center justify-center shrink-0 border border-white/5">
+                                          {idx + 1}
+                                        </span>
+                                        <img
+                                          src={iconUrl}
+                                          alt=""
+                                          onError={(e) => {
+                                            (e.target as HTMLElement).style.display = "none";
+                                          }}
+                                          className="w-3.5 h-3.5 shrink-0 object-contain"
+                                        />
+                                        <span className="truncate flex-1 font-medium">
+                                          {domain}
+                                        </span>
+                                        <ExternalLink className="w-3 h-3 text-gray-600 shrink-0" />
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 2. Loading state (shown when query is sent but answer is not yet streaming) */}
+                            {isSearching && index === messages.length - 1 && !message.answer && (
+                              <div className="flex items-center space-x-2 py-4">
+                                <div className="relative w-5 h-5">
+                                  <div className="absolute inset-0 rounded-full border-2 border-teal-500/20" />
+                                  <div className="absolute inset-0 rounded-full border-2 border-teal-500 border-t-transparent animate-spin" />
+                                </div>
+                                <span className="text-xs text-teal-400 font-semibold animate-pulse">
+                                  {searchPhase || "Synthesizing response..."}
+                                </span>
+                              </div>
+                            )}
+
+                            {/* 3. Streamed Answer Content */}
+                            {message.answer && (
+                              <div className="text-gray-300 prose prose-invert max-w-none">
+                                <Markdown text={message.answer} />
+                                
+                                {isSearching && index === messages.length - 1 && (
+                                  <span className="inline-block w-1.5 h-4 ml-1 bg-teal-400 animate-pulse align-middle animate-[pulse_1s_infinite]" />
+                                )}
+                              </div>
+                            )}
+
+                            {/* 4. Follow-up Clickable Questions */}
+                            {message.followUps && message.followUps.length > 0 && !isSearching && (
+                              <div className="pt-4 space-y-2">
+                                <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest block">
+                                  Related
+                                </span>
+                                <div className="flex flex-col space-y-1.5">
+                                  {message.followUps.map((q, qIdx) => (
+                                    <button
+                                      key={qIdx}
+                                      onClick={() => handleSearchSubmit(q)}
+                                      className="w-full text-left px-3.5 py-2.5 bg-transparent hover:bg-white/5 border border-white/5 rounded-xl text-xs font-semibold text-gray-300 hover:text-white flex items-center justify-between transition-all group cursor-pointer"
+                                    >
+                                      <span>{q}</span>
+                                      <Plus className="w-3.5 h-3.5 text-gray-500 group-hover:text-teal-400 group-hover:scale-110 transition-all shrink-0 ml-3" />
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div ref={threadEndRef} />
+                </div>
               </div>
 
-              {/* Sticky Bottom Search input */}
-              <div className="w-full shrink-0 border-t border-[#1E1E20] bg-[#131314]/90 backdrop-blur-md py-4">
+              {/* Fixed Bottom Input Pane (Does NOT scroll) */}
+              <div className="w-full shrink-0 border-t border-[#1E1E20] bg-[#131314] py-4">
                 <div className="max-w-3xl mx-auto px-6">
                   <div className="w-full bg-[#1E1E20] border border-[#2A2A2D] rounded-xl p-3 shadow-lg flex items-center focus-within:border-[#38383C] transition-all">
                     <input
