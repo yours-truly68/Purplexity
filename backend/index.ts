@@ -259,7 +259,8 @@ app.use(express.static(distPath));
 
 // 2. Handle React Client-Side Routing (SPA)
 // 🔥 FIX: Changed '/*splat' to '/:splat*' which is the official Express 5 catch-all syntax
-app.get("/:splat*", (req, res) => {
+// ✅ Uses a native Regular Expression matching everything. Completely bypasses string-to-regexp parsing!
+app.get(/^(?!\/api).*$/, (req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
 });
 
