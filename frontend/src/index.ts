@@ -3,6 +3,7 @@ import index from "./index.html";
 
 
 const server = serve({
+  port: Number(Bun.env.PORT ?? 3000),
   routes: {
     // Serve index.html for all unmatched routes.
     "/*": index,

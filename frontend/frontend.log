@@ -1,0 +1,12 @@
+1 | import { serve } from "bun";
+2 | import index from "./index.html";
+3 | 
+4 | 
+5 | const server = serve({
+                   ^
+error: Failed to start server. Is port 3005 in use?
+ syscall: "listen",
+   errno: 0,
+    code: "EADDRINUSE"
+
+      at /Users/mohammadrazim/Desktop/Projects/purplexity/frontend/src/index.ts:5:16
