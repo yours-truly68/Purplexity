@@ -252,14 +252,14 @@ app.post("/purplexity_ask/follow_up", authMiddleware, async (req, res) => {
   });
 });
 
-// Absolute path to your dist folder inside the container
 const distPath = path.resolve(process.cwd(), "../dist");
 
-// 1. Serve the static assets from the React build directory cleanly
+// 1. Serve the static assets from your React build directory
 app.use(express.static(distPath));
 
 // 2. Handle React Client-Side Routing (SPA)
-app.get("/*splat", (req, res) => {
+// 🔥 FIX: Changed '/*splat' to '/:splat*' which is the official Express 5 catch-all syntax
+app.get("/:splat*", (req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
 });
 
