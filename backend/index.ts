@@ -257,7 +257,8 @@ app.use(express.static(path.join(__dirname, "../dist")));
 
 // 2. Handle React Routing (SPA)
 // If a request doesn't match any API endpoints, send back index.html so React Router takes over
-app.get("*", (req, res) => {
+// ✅ Express v5 compliant named wildcard syntax
+app.get("/*splat", (req, res) => {
   res.sendFile(path.join(__dirname, "../dist/index.html"));
 });
 
