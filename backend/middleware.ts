@@ -3,10 +3,9 @@ import type {
   Request,
   Response,
 } from "express-serve-static-core";
-import { createSupabaseClient } from "./client";
+
+import { createSupabaseClient } from "./client.ts";
 import { prisma } from "./db";
-
-
 
 const client = createSupabaseClient();
 
@@ -42,19 +41,24 @@ export async function authMiddleware(
     const userId = user.id;
     try {
       if (userId) {
-        await prisma.user.create({
-          data: {
-            id: user.id,
-            supabaseId:user.id,
-            email: user.email,
-            provider:
-              user.app_metadata.provider === "google" ? "Google" : "Github",
-            name: user.app_metadata.full_name,
-          },
+        const existingUser = await prisma.user.findUnique({
+          where: { id: userId },
         });
+        if (!existingUser) {
+          await prisma.user.create({
+            data: {
+              id: user.id,
+              supabaseId: user.id,
+              email: user.email,
+              provider:
+                user.app_metadata.provider === "google" ? "Google" : "Github",
+              name: user.app_metadata.full_name || user.email?.split("@")[0] || "User",
+            },
+          });
+        }
       }
     } catch (error) {
-      console.log(error)
+      console.error("Error ensuring user exists:", error);
     }
 
     req.userId = userId;

@@ -8,6 +8,8 @@ import { authMiddleware } from "./middleware";
 import cors from "cors";
 import { prisma } from "./db";
 import { slugify, sourcesBlock } from "./utils";
+import path from "path";
+
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -24,18 +26,6 @@ app.use(cors());
 app.use(express.urlencoded());
 
 const PORT = Bun.env.PORT ?? 3001;
-
-// const res = await prisma.user.create(
-//     {
-//         data:  {
-//             email: "mohammedrazim880@gmail.com",
-//             provider: "Github",
-//             name: "Razim"
-//         }
-//     }
-// )
-
-// console.log(res)
 
 app.get("/conversations", authMiddleware, async (req, res) => {
   const conversations = await prisma.conversation.findMany({
@@ -55,7 +45,7 @@ app.get("/conversations/:conversationId", authMiddleware, async (req, res) => {
     });
   }
 
-  const conversation = prisma.conversation.findFirst({
+  const conversation = await prisma.conversation.findFirst({
     where: {
       id: conversationId,
       userId: req.userId,
@@ -127,21 +117,22 @@ app.post("/purplexity_ask", authMiddleware, async (req, res) => {
   res.header("Content-Type", "text/event-stream");
   res.header("X-Conversation-Id", conversation.id);
 
+  const sources = sourcesBlock(webSearchResults);
+  res.write(sources);
+
   let assistantText = "";
   for await (const textPart of result.textStream) {
     assistantText += textPart;
     res.write(textPart);
   }
 
-  const sources = sourcesBlock(webSearchResults);
-  res.write(sources);
   //Close Event Stream
   res.end();
 
-  //Persist the full asistant reply + so follow ups can reconstruct the conversation verbatim
+  //Persist the full assistant reply
   await prisma.message.create({
     data: {
-      content: assistantText + sources,
+      content: sources + assistantText,
       role: "Assistant",
       conversationId: conversation.id,
     },
@@ -161,7 +152,6 @@ app.post("/purplexity_ask", authMiddleware, async (req, res) => {
 
   //return the response to the user
 });
-
 
 //follow up questions
 app.post("/purplexity_ask/follow_up", authMiddleware, async (req, res) => {
@@ -192,46 +182,42 @@ app.post("/purplexity_ask/follow_up", authMiddleware, async (req, res) => {
     },
   });
 
-  if(!conversation){
+  if (!conversation) {
     return res.status(404).json({
-      message: "Conversation Not Found"
-    })
+      message: "Conversation Not Found",
+    });
   }
-    //Fresh websearch for followup query
-    const webSearchResponse = await client.search(query, { searchDepth: "advanced"})
-    const webSearchResults = webSearchResponse.results
+  //Fresh websearch for followup query
+  const webSearchResponse = await client.search(query, {
+    searchDepth: "advanced",
+  });
+  const webSearchResults = webSearchResponse.results;
 
-    await prisma.message.create({
-      data: {
-        content: query,
-        role: "User",
-        conversationId: conversation.id
-      }
-    })
-
-
+  await prisma.message.create({
+    data: {
+      content: query,
+      role: "User",
+      conversationId: conversation.id,
+    },
+  });
 
   //Step 2: Forward the full chat history to LLM
 
-  const history: ModelMessage[] = conversation.messages.map(m => ({
-    role: m.role=== "User" ? "user" : "assistant",
-    content: m.content
-  }))
+  const history: ModelMessage[] = conversation.messages.map((m) => ({
+    role: m.role === "User" ? "user" : "assistant",
+    content: m.content,
+  }));
 
   const currentPrompt = PROMPT_TEMPLATE.replace(
     "{{WEB_SEARCH_RESULTS}}",
     JSON.stringify(webSearchResults),
   ).replace("{{USER_QUERY}}", query);
 
-
-  const result = streamText( 
-    {
-      model: groq("qwen/qwen3.6-27b"),
-      system: SYSTEM_PROMPT,
-      messages: [...history, {role: "user", content: currentPrompt}]
-
-    }
-  )
+  const result = streamText({
+    model: groq("qwen/qwen3.6-27b"),
+    system: SYSTEM_PROMPT,
+    messages: [...history, { role: "user", content: currentPrompt }],
+  });
 
   res.header("Cache-Control", "no-cache");
   res.header("Content-Type", "text/event-stream");
@@ -239,33 +225,34 @@ app.post("/purplexity_ask/follow_up", authMiddleware, async (req, res) => {
   //Step 2.5: Do some context engineering
   //Step 3: Stream the response to the user
 
+  const sources = sourcesBlock(webSearchResults);
+  res.write(sources);
 
-  let assistantText = ""
-  for await(const textPart of result.textStream){
-    assistantText += textPart
-    res.write(textPart)
+  let assistantText = "";
+  for await (const textPart of result.textStream) {
+    assistantText += textPart;
+    res.write(textPart);
   }
 
-  const sources = sourcesBlock(webSearchResults)
-  res.write(sources);
-  res.end()
+  res.end();
 
-  await prisma.message.create(
-    {
-      data: {
-        content: assistantText + sources,
-        role: "Assistant",
-        conversationId: conversation.id
-      }
-    }
-  )
+  await prisma.message.create({
+    data: {
+      content: sources + assistantText,
+      role: "Assistant",
+      conversationId: conversation.id,
+    },
+  });
 });
 
+// 1. Serve the static assets from the React build directory
+app.use(express.static(path.join(__dirname, "../dist")));
 
-
-
-
-
+// 2. Handle React Routing (SPA)
+// If a request doesn't match any API endpoints, send back index.html so React Router takes over
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "../dist/index.html"));
+});
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

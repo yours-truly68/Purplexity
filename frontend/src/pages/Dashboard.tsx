@@ -195,6 +195,128 @@ function getDomain(url: string) {
 }
 
 // ----------------------------------------
+// Code Block with Copy & IFrame Preview
+// ----------------------------------------
+const CodeBlock = ({ code, language }: { code: string; language: string }) => {
+  const [activeTab, setActiveTab] = useState<"code" | "preview">("code");
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy code:", err);
+    }
+  };
+
+  const isHtml =
+    language === "html" ||
+    language === "svg" ||
+    code.trim().startsWith("<!DOCTYPE html>") ||
+    (code.trim().startsWith("<html") && code.trim().endsWith("</html>"));
+
+  return (
+    <div className="my-4 border border-white/5 rounded-xl bg-black/30 overflow-hidden shadow-lg">
+      <div className="flex items-center justify-between px-4 py-2 bg-black/60 border-b border-white/5 text-xs text-gray-400 font-semibold select-none">
+        <div className="flex items-center space-x-3">
+          <span className="uppercase text-teal-400 font-mono tracking-wider">{language || "code"}</span>
+          {isHtml && (
+            <div className="flex bg-[#1E1E20] rounded-lg p-0.5 border border-white/5">
+              <button
+                onClick={() => setActiveTab("code")}
+                className={`px-2.5 py-1 rounded-md transition-all font-semibold cursor-pointer ${
+                  activeTab === "code" ? "bg-teal-500 text-black shadow-sm" : "hover:text-white"
+                }`}
+              >
+                Code
+              </button>
+              <button
+                onClick={() => setActiveTab("preview")}
+                className={`px-2.5 py-1 rounded-md transition-all font-semibold cursor-pointer ${
+                  activeTab === "preview" ? "bg-teal-500 text-black shadow-sm" : "hover:text-white"
+                }`}
+              >
+                Preview
+              </button>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={handleCopy}
+          className="flex items-center space-x-1 hover:text-white transition-colors cursor-pointer bg-white/5 hover:bg-white/10 px-2 py-1 rounded-md"
+        >
+          {copied ? (
+            <span className="text-teal-400">Copied!</span>
+          ) : (
+            <>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+              </svg>
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+
+      {activeTab === "preview" && isHtml ? (
+        <div className="p-2 bg-white rounded-b-xl h-80">
+          <iframe
+            srcDoc={code}
+            title="Preview"
+            sandbox="allow-scripts"
+            className="w-full h-full border-0 bg-white"
+          />
+        </div>
+      ) : (
+        <pre className="p-4 overflow-x-auto text-sm font-mono text-gray-300 leading-relaxed max-h-[400px]">
+          <code>{code}</code>
+        </pre>
+      )}
+    </div>
+  );
+};
+
+// ----------------------------------------
+// Copy Answer Button Component
+// ----------------------------------------
+const CopyAnswerButton = ({ text }: { text: string }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy answer:", err);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold text-gray-500 hover:text-white bg-transparent hover:bg-white/5 border border-white/5 rounded-lg transition-all cursor-pointer select-none"
+    >
+      {copied ? (
+        <>
+          <span className="text-teal-400">Copied to clipboard!</span>
+        </>
+      ) : (
+        <>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+          </svg>
+          <span>Copy Answer</span>
+        </>
+      )}
+    </button>
+  );
+};
+
+// ----------------------------------------
 // Custom Markdown Renderer Component
 // ----------------------------------------
 const Markdown = ({ text }: { text: string }) => {
@@ -202,6 +324,7 @@ const Markdown = ({ text }: { text: string }) => {
 
   const lines = text.split("\n");
   let inCodeBlock = false;
+  let blockLanguage = "";
   let codeContent: string[] = [];
   const renderedElements: React.ReactNode[] = [];
 
@@ -210,17 +333,20 @@ const Markdown = ({ text }: { text: string }) => {
     if (line.trim().startsWith("```")) {
       if (inCodeBlock) {
         inCodeBlock = false;
+        const currentLang = blockLanguage;
+        const currentContent = codeContent.join("\n");
         renderedElements.push(
-          <pre
+          <CodeBlock
             key={`code-${index}`}
-            className="p-4 my-3 overflow-x-auto text-sm font-mono rounded-xl bg-black/50 border border-white/5 text-teal-400"
-          >
-            <code>{codeContent.join("\n")}</code>
-          </pre>
+            code={currentContent}
+            language={currentLang}
+          />
         );
         codeContent = [];
+        blockLanguage = "";
       } else {
         inCodeBlock = true;
+        blockLanguage = line.trim().slice(3).trim().toLowerCase();
       }
       return;
     }
@@ -1027,11 +1153,19 @@ const Dashboard = () => {
 
                             {/* 3. Streamed Answer Content */}
                             {message.answer && (
-                              <div className="text-gray-300 prose prose-invert max-w-none">
-                                <Markdown text={message.answer} />
+                              <div className="space-y-3">
+                                <div className="text-gray-300 prose prose-invert max-w-none">
+                                  <Markdown text={message.answer} />
+                                  
+                                  {isSearching && index === messages.length - 1 && (
+                                    <span className="inline-block w-1.5 h-4 ml-1 bg-teal-400 animate-pulse align-middle animate-[pulse_1s_infinite]" />
+                                  )}
+                                </div>
                                 
-                                {isSearching && index === messages.length - 1 && (
-                                  <span className="inline-block w-1.5 h-4 ml-1 bg-teal-400 animate-pulse align-middle animate-[pulse_1s_infinite]" />
+                                {!isSearching && (
+                                  <div className="flex items-center space-x-2 pt-2 border-t border-white/5">
+                                    <CopyAnswerButton text={message.answer} />
+                                  </div>
                                 )}
                               </div>
                             )}
