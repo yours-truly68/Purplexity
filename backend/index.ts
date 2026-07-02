@@ -22,7 +22,14 @@ dotenv.config();
 const client = tavily({ apiKey: Bun.env.TAVILY_API_KEY });
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(
+  cors({
+    origin: "*", // Allows any website/domain to hit your API endpoints
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // Allowed HTTP actions
+    allowedHeaders: ["Content-Type", "Authorization", "X-Conversation-Id"], // Allowed headers (including your custom stream tracker)
+    exposedHeaders: ["X-Conversation-Id"], // Crucial! Tells the browser it's safe to read your custom header during streams
+  })
+);
 app.use(express.urlencoded());
 
 const PORT = Bun.env.PORT ?? 3001;
