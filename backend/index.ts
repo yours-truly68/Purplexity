@@ -252,14 +252,15 @@ app.post("/purplexity_ask/follow_up", authMiddleware, async (req, res) => {
   });
 });
 
-// 1. Serve the static assets from the React build directory
-app.use(express.static(path.join(__dirname, "../dist")));
+// Absolute path to your dist folder inside the container
+const distPath = path.resolve(process.cwd(), "../dist");
 
-// 2. Handle React Routing (SPA)
-// If a request doesn't match any API endpoints, send back index.html so React Router takes over
-// ✅ Express v5 compliant named wildcard syntax
+// 1. Serve the static assets from the React build directory cleanly
+app.use(express.static(distPath));
+
+// 2. Handle React Client-Side Routing (SPA)
 app.get("/*splat", (req, res) => {
-  res.sendFile(path.join(__dirname, "../dist/index.html"));
+  res.sendFile(path.join(distPath, "index.html"));
 });
 
 app.listen(PORT, () => {
